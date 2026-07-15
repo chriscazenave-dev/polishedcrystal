@@ -194,22 +194,93 @@
       var EJS_gameName = "Pokémon Polished Crystal";
       var EJS_gameID = 1;
       var EJS_startOnLoaded = true;
-      var EJS_defaultOptions = { "save-save-interval": "30" };
 
-      function flushBatterySave() {
-        var emulator = window.EJS_emulator;
-        if (!emulator || !emulator.started || !emulator.gameManager) return;
-        try {
-          emulator.gameManager.saveSaveFiles();
-        } catch (err) {
-          console.warn("Failed to persist save", err);
+      // In-game (battery/SRAM) save persistence.
+      //
+      // EmulatorJS mounts the core's save directory as an IDBFS with
+      // autoPersist, but that roundtrip is unreliable for this gambatte core:
+      // on every fresh boot the core reinitialises SRAM to an empty (0xFF)
+      // image and autoPersist writes that empty image back to IndexedDB,
+      // destroying any previously saved game before it can be loaded. As a
+      // result the in-game "SAVE" menu never survived a reload.
+      //
+      // To make normal saves durable we keep our own copy of the raw .srm in
+      // localStorage and re-inject it into the running core after it boots.
+      (function () {
+        var SAVE_KEY = "polishedcrystal-battery-save-v1";
+        var restored = false;
+
+        function readyEmulator() {
+          var e = window.EJS_emulator;
+          if (!e || !e.started || !e.gameManager) return null;
+          return e;
         }
-      }
 
-      document.addEventListener("visibilitychange", function () {
-        if (document.visibilityState === "hidden") flushBatterySave();
-      });
-      window.addEventListener("pagehide", flushBatterySave);
+        function bytesToBase64(bytes) {
+          var chunk = 0x8000;
+          var parts = [];
+          for (var i = 0; i < bytes.length; i += chunk) {
+            parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + chunk)));
+          }
+          return btoa(parts.join(""));
+        }
+
+        function base64ToBytes(base64) {
+          var binary = atob(base64);
+          var bytes = new Uint8Array(binary.length);
+          for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          return bytes;
+        }
+
+        function isEmptySave(bytes) {
+          for (var i = 0; i < bytes.length; i++) {
+            if (bytes[i] !== 0xff && bytes[i] !== 0x00) return false;
+          }
+          return true;
+        }
+
+        function persistSave() {
+          var e = readyEmulator();
+          if (!e || !restored) return;
+          try {
+            var data = e.gameManager.getSaveFile();
+            if (data && data.length && !isEmptySave(data)) {
+              localStorage.setItem(SAVE_KEY, bytesToBase64(data));
+            }
+          } catch (err) {
+            console.warn("Failed to persist battery save", err);
+          }
+        }
+
+        function restoreSave() {
+          var e = readyEmulator();
+          if (!e || restored) return;
+          restored = true;
+          try {
+            var stored = localStorage.getItem(SAVE_KEY);
+            if (!stored) return;
+            var data = base64ToBytes(stored);
+            if (!data.length) return;
+            var path = e.gameManager.getSaveFilePath();
+            e.gameManager.FS.writeFile(path, data);
+            e.gameManager.loadSaveFiles();
+          } catch (err) {
+            console.warn("Failed to restore battery save", err);
+          }
+        }
+
+        var bootTimer = setInterval(function () {
+          if (!readyEmulator()) return;
+          clearInterval(bootTimer);
+          restoreSave();
+          setInterval(persistSave, 15000);
+        }, 300);
+
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "hidden") persistSave();
+        });
+        window.addEventListener("pagehide", persistSave);
+      })();
     </script>
     <script src="https://cdn.emulatorjs.org/stable/data/loader.js"></script>
   </body>
