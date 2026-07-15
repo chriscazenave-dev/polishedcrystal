@@ -192,7 +192,24 @@
       var EJS_pathtodata = "https://cdn.emulatorjs.org/stable/data/";
       var EJS_gameUrl = "roms/polishedcrystal-3.2.3.gbc";
       var EJS_gameName = "Pokémon Polished Crystal";
+      var EJS_gameID = 1;
       var EJS_startOnLoaded = true;
+      var EJS_defaultOptions = { "save-save-interval": "30" };
+
+      function flushBatterySave() {
+        var emulator = window.EJS_emulator;
+        if (!emulator || !emulator.started || !emulator.gameManager) return;
+        try {
+          emulator.gameManager.saveSaveFiles();
+        } catch (err) {
+          console.warn("Failed to persist save", err);
+        }
+      }
+
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "hidden") flushBatterySave();
+      });
+      window.addEventListener("pagehide", flushBatterySave);
     </script>
     <script src="https://cdn.emulatorjs.org/stable/data/loader.js"></script>
   </body>
